@@ -21,7 +21,10 @@ async function connect(): Promise<ReturnType<typeof createClient>> {
 async function reset(account: string): Promise<void> {
     const client = await connect();
     try {
-        await client.set(`${account}/balance`, DEFAULT_BALANCE);
+        await client.set(`${account}/balance`, DEFAULT_BALANCE.toString());
+    } catch (e) {
+        console.error("Error while resetting account", e);
+        throw e;
     } finally {
         await client.disconnect();
     }
@@ -30,14 +33,22 @@ async function reset(account: string): Promise<void> {
 async function charge(account: string, charges: number): Promise<ChargeResult> {
     const client = await connect();
     try {
-        const balance = parseInt((await client.get(`${account}/balance`)) ?? "");
+        const balanceStr = await client.get(`${account}/balance`);
+        const balance = parseInt(balanceStr ?? "0");
+
         if (balance >= charges) {
-            await client.set(`${account}/balance`, balance - charges);
-            const remainingBalance = parseInt((await client.get(`${account}/balance`)) ?? "");
+            await client.multi()
+                .set(`${account}/balance`, (balance - charges).toString())
+                .exec();
+
+            const remainingBalance = balance - charges;
             return { isAuthorized: true, remainingBalance, charges };
         } else {
             return { isAuthorized: false, remainingBalance: balance, charges: 0 };
         }
+    } catch (e) {
+        console.error("Error while charging account", e);
+        throw e;
     } finally {
         await client.disconnect();
     }
@@ -46,6 +57,7 @@ async function charge(account: string, charges: number): Promise<ChargeResult> {
 export function buildApp(): express.Application {
     const app = express();
     app.use(json());
+
     app.post("/reset", async (req, res) => {
         try {
             const account = req.body.account ?? "account";
@@ -57,10 +69,12 @@ export function buildApp(): express.Application {
             res.status(500).json({ error: String(e) });
         }
     });
+
     app.post("/charge", async (req, res) => {
         try {
             const account = req.body.account ?? "account";
-            const result = await charge(account, req.body.charges ?? 10);
+            const charges = req.body.charges ?? 10;
+            const result = await charge(account, charges);
             console.log(`Successfully charged account ${account}`);
             res.status(200).json(result);
         } catch (e) {
@@ -68,5 +82,6 @@ export function buildApp(): express.Application {
             res.status(500).json({ error: String(e) });
         }
     });
+
     return app;
 }
